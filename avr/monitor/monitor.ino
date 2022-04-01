@@ -15,26 +15,36 @@
 void setup() {
   Serial.begin(9600);
   randomSeed(0);
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, LOW);
 }
 
-int dtEMA = 1000;
-unsigned long t_prev = 0;
-unsigned long t_curr = 0;
-float alphaDT = 0.5;   // alpha~1 => keep hardly any history
-float hr = 0;
-
 void loop() {
+  pollHR();
+}
+
+// Relevant human HR is in [30, 180], implying a deltaT
+// in the range [330, 2000].  deltaT outside this range
+// is spurious and is ignored.  
+unsigned int deltaTMin = 330;
+unsigned int deltaTMax = 2000;
+unsigned long millisPrev = 0UL;
+unsigned long millisCurr = 0;
+unsigned int deltaT = 0;
+float HRAlpha = 0.35;
+float HRCurr = 0;
+float HREWMA = 0.0;
+void pollHR() {
   if(newWaveformStart()) {
-    t_curr = millis();
-    dtEMA *= (1-alphaDT);
-    dtEMA += alphaDT * (t_curr - t_prev);
-    hr = (float) 60 * 1000 / dtEMA;
-    t_prev = t_curr;
+    millisPrev = millisCurr;
+    millisCurr = millis();
+    deltaT = millisCurr - millisPrev;
+    if((deltaTMin < deltaT) & (deltaT < deltaTMax)) {
+      HRCurr = (float) 60 * 1000 / deltaT;
+      HREWMA *= (1 - HRAlpha);
+      HREWMA += HRAlpha * HRCurr;
+    }
   }
   Serial.print(',');
-  Serial.println(hr);
+  Serial.println(HREWMA);
 }
 
 /*
@@ -42,12 +52,12 @@ void loop() {
  * period in order to compute the HR.  To identify the period, we
  * track a Exponentially Weighted Moving Average of the IR signal.
  * Each time the IR signal crosses from below to above its EWMA,
- * we identify the start of a new waveform and note the delta_t 
+ * we identify the start of a new waveform and note the deltaT 
  * since the previous start.  For EWMA details, see:
  * https://en.wikipedia.org/wiki/Moving_average#Exponential_moving_average
  * 
  * Since we need to poll multiple sensors in the loop(), we can't 
- * simply encapsulate the entire delta_t calculation into one 
+ * simply encapsulate the entire deltaT calculation into one 
  * function.  So this function outputs a 1 when a new waveform is
  * detected and a 0 otherwise.  
  */
@@ -97,16 +107,19 @@ float IROpticalSensorTimeAvg() {
  * bpm, and then add some normally distributed noise.  This will be
  * replaced by analogRead(IROpticalSensorPin).
  */
-float bpm = 65.0;
-float ir_mean = 405.0;
-float ir_ampl = 25.0;
-float ir_noise_ampl = 15.0;
-float t_sec, ir_reading, ir_noise;
+float BPM[] = {65.0, 44.0};
+float mockIRMean = 405.0;
+float mockIRAmpl = 25.0;
+float mockIRNoiseAmpl = 15.0;
+float tSec, mockIRReading, mockIRNoiseReading;
+byte BPMIdx;
 float mockIROpticalSensor() {
-  t_sec = (float) millis() / 1000;
-  ir_reading = ir_ampl * sin(TWO_PI * bpm * t_sec / 60) + ir_mean;
-  ir_noise = ir_noise_ampl * standardNormal();
-  return ir_reading + ir_noise;
+  tSec = (float) millis() / 1000;
+  // Determine which BPM to use; alternate each minute
+  BPMIdx = ((int) tSec / 60) % 2;
+  mockIRReading = mockIRAmpl * sin(TWO_PI * BPM[BPMIdx] * tSec / 60) + mockIRMean;
+  mockIRNoiseReading = mockIRNoiseAmpl * standardNormal();
+  return mockIRReading + mockIRNoiseReading;
 }
 
 /*
@@ -114,7 +127,7 @@ float mockIROpticalSensor() {
  * Box-Muller transform.  Using two values u1, u2 ~ U[0,1], we
  * create two values z1, z2 ~ N(0,1).  Thus, every other call 
  * to this function generates the value pair, and every other call
- * simply returns the cached one.  For details, see:
+ * simply returns the second cached one.  For details, see:
  * 
  * https://en.wikipedia.org/wiki/Box%E2%80%93Muller_transform
  */
