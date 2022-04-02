@@ -12,39 +12,51 @@
  *  https://create.arduino.cc/projecthub/Johan_Ha/from-ky-039-to-heart-rate-0abfca
 */
 
+#include <limits.h>
+
+
 void setup() {
   Serial.begin(9600);
   randomSeed(0);
 }
 
+float HRGlobal = 60.0;
+
 void loop() {
-  pollHR();
+  HRGlobal = pollHR();
+  Serial.println();
 }
 
-// Relevant human HR is in [30, 180], implying a deltaT
-// in the range [330, 2000].  deltaT outside this range
-// is spurious and is ignored.  
-unsigned int deltaTMin = 330;
-unsigned int deltaTMax = 2000;
-unsigned long millisPrev = 0UL;
-unsigned long millisCurr = 0;
-unsigned int deltaT = 0;
-float HRAlpha = 0.35;
-float HRCurr = 0;
-float HREWMA = 0.0;
-void pollHR() {
+/*
+ * Here we poll the HR.  To do so, we check if a new wave
+ * form has started, and if it has, we compute the HR from
+ * the time delta since the last waveform.  We smooth with
+ * an EWMA.  See the link later for details about EWMA.  
+ * 
+ * Relevant human HR is in [30, 180], implying a deltaT
+ * in the range [330, 2000].  DeltaTs below this range
+ * are spurious and are ignored.  
+ * 
+ */
+unsigned long millisPrevGlobal = 0UL;
+unsigned long millisCurrGlobal = 0;
+float HREWMAGlobal = 0.0;
+float pollHR() {
+  float HRAlpha = 0.8;
+  unsigned int deltaT = 0;
+  unsigned int deltaTMin = 333;
   if(newWaveformStart()) {
-    millisPrev = millisCurr;
-    millisCurr = millis();
-    deltaT = millisCurr - millisPrev;
-    if((deltaTMin < deltaT) & (deltaT < deltaTMax)) {
-      HRCurr = (float) 60 * 1000 / deltaT;
-      HREWMA *= (1 - HRAlpha);
-      HREWMA += HRAlpha * HRCurr;
+    millisPrevGlobal = millisCurrGlobal;
+    millisCurrGlobal = millis();
+    deltaT = millisCurrGlobal - millisPrevGlobal;
+    if(deltaTMin < deltaT) {
+      HREWMAGlobal *= (1 - HRAlpha);
+      HREWMAGlobal += HRAlpha * 60 * 1000 / deltaT;
     }
   }
+  Serial.print(HREWMAGlobal);
   Serial.print(',');
-  Serial.println(HREWMA);
+  return HREWMAGlobal;
 }
 
 /*
@@ -62,20 +74,20 @@ void pollHR() {
  * detected and a 0 otherwise.  
  */
 
-float IRPrev = 0.0;
-float IRCurr = 0.0;
-float IREWMA = 0;
-float IRAlpha = 0.01;  // alpha~0 => keep a lot of EWMA history
+float IRPrevGlobal = 0.0;
+float IRCurrGlobal = 0.0;
+float IREWMAGlobal = 0;
 byte newWaveformStart() {
-  IRPrev = IRCurr;
-  IRCurr = IROpticalSensorTimeAvg();
-  IREWMA *= (1 - IRAlpha);
-  IREWMA += IRAlpha * IRCurr;
-  Serial.print(IRCurr);
+  float IRAlpha = 0.01;  // alpha~0 => keep a lot of EWMA history
+  IRPrevGlobal = IRCurrGlobal;
+  IRCurrGlobal = IROpticalSensorTimeAvg();
+  IREWMAGlobal *= (1 - IRAlpha);
+  IREWMAGlobal += IRAlpha * IRPrevGlobal;
+  Serial.print(IRCurrGlobal);
   Serial.print(',');
-  Serial.print(IREWMA);
+  Serial.print(IREWMAGlobal);
   Serial.print(',');
-  return (IRPrev < IREWMA) & (IREWMA <= IRCurr);
+  return (IRPrevGlobal < IREWMAGlobal) & (IREWMAGlobal <= IRCurrGlobal);
 }
 
 /*
@@ -84,13 +96,12 @@ byte newWaveformStart() {
  * do-while construct to ensure that at least 1 measurement is captured,
  * avoiding any divide-by-zero problems in the return value.  
  */
-unsigned int dt = 50;
-float sum;
-unsigned long n, now, start;
 float IROpticalSensorTimeAvg() {
-  sum = 0;
-  n = 0;
-  start = millis();
+  unsigned int dt = 50;
+  float sum = 0;
+  unsigned long n = 0;
+  unsigned long now;
+  unsigned long start = millis();
   do {
     sum += mockIROpticalSensor();
     n++;
@@ -104,22 +115,48 @@ float IROpticalSensorTimeAvg() {
  * In the absense of a physcial IR sensor, we can create mock data.
  * We select a fixed mock BPM of 65.  We "read" the value of the
  * optical sensor as a sine wave function of (real) time at the mock 
- * bpm, and then add some normally distributed noise.  This will be
+ * BPM, and then add some normally distributed noise.  This will be
  * replaced by analogRead(IROpticalSensorPin).
  */
-float BPM[] = {65.0, 44.0};
-float mockIRMean = 405.0;
-float mockIRAmpl = 25.0;
-float mockIRNoiseAmpl = 15.0;
-float tSec, mockIRReading, mockIRNoiseReading;
-byte BPMIdx;
 float mockIROpticalSensor() {
-  tSec = (float) millis() / 1000;
-  // Determine which BPM to use; alternate each minute
-  BPMIdx = ((int) tSec / 60) % 2;
-  mockIRReading = mockIRAmpl * sin(TWO_PI * BPM[BPMIdx] * tSec / 60) + mockIRMean;
-  mockIRNoiseReading = mockIRNoiseAmpl * standardNormal();
+  float BPM[] = {65.0, 44.0, 92.0};
+  float mockIRMean = 405.0;
+  float mockIRAmpl = 25.0;
+  float mockIRNoiseAmpl = 15.0;
+  float tSec = (float) millis() / 1000;
+  byte BPMIdx = ((int) tSec / 60) % 3;
+  float mockIRReading = mockIRAmpl * sin(TWO_PI * BPM[BPMIdx] * tSec / 60) + mockIRMean;
+  float mockIRNoiseReading = mockIRNoiseAmpl * standardNormalVariate();
   return mockIRReading + mockIRNoiseReading;
+}
+
+float accelerationSensorIntervalMax(float * targetArray, byte arrayLen) {
+  unsigned int dt = 50;
+  float accelMax = -1.0;
+  float mag;
+  unsigned long now;
+  unsigned long start = millis();
+  do {
+    mockAccelerometerSensor(targetArray, arrayLen);
+    mag = magnitude(targetArray, arrayLen);
+    accelMax = accelMax < mag ? mag : accelMax;
+    now = millis();
+  } while(now - start < dt);
+  return accelMax;
+}
+
+float magnitude(float * vec, byte arrayLen) {
+  float m = 0.0;
+  for(byte i = 0; i < arrayLen; i++) {
+    m += vec[i]*vec[i];
+  }
+  return m;
+}
+
+void mockAccelerometerSensor(float * targetArray, byte arrayLen) {
+  for(byte i = 0; i < arrayLen; i++) {
+    targetArray[i] = normalVariate(0.0, 0.2);
+  }
 }
 
 /*
@@ -131,19 +168,22 @@ float mockIROpticalSensor() {
  * 
  * https://en.wikipedia.org/wiki/Box%E2%80%93Muller_transform
  */
-unsigned long LONG_MAX = 2147483647;
-byte needNewNormal = 1;
-float u1, u2, z1, z2;
-float standardNormal() {
-  if(needNewNormal) {
-    u1 = (float) random(1, LONG_MAX) / LONG_MAX;
-    u2 = (float) random(1, LONG_MAX) / LONG_MAX;
-    z1 = sqrt(-2*log(u1))*cos(TWO_PI*u2);
-    z2 = sqrt(-2*log(u1))*sin(TWO_PI*u2);
-    needNewNormal = 0;
+byte needNewNormalGlobal = 1;
+float z2Global;
+float standardNormalVariate() {
+  if(needNewNormalGlobal) {
+    float u1 = (float) random(1, LONG_MAX) / LONG_MAX;
+    float u2 = (float) random(1, LONG_MAX) / LONG_MAX;
+    float z1 = sqrt(-2*log(u1))*cos(TWO_PI*u2);
+    z2Global = sqrt(-2*log(u1))*sin(TWO_PI*u2);
+    needNewNormalGlobal = 0;
     return z1;
   } else {
-    needNewNormal = 1;
-    return z2;
+    needNewNormalGlobal = 1;
+    return z2Global;
   }
+}
+
+float normalVariate(float mean, float std) {
+  return std * standardNormalVariate() + mean;
 }
