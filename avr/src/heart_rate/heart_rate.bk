@@ -1,0 +1,38 @@
+#include <inttypes.h>
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <avr/sleep.h>
+
+
+const int sensorPin = 1;
+
+const unsigned int DT = 50;
+const unsigned int VSCALE = 30;
+const unsigned int VCLIP = 100;
+
+const long unsigned int HRDTMAX = 2000;
+const long unsigned int HRDTMIN = 333;
+
+float getTimeAvgRead(void) {
+    float v = analogRead(sensorPin);
+    long unsigned int t = millis();
+    unsigned int n = 1;
+    while(millis() - t < DT) {
+        v += analogRead(sensorPin);
+        n++;
+    }
+    return(-v/n);
+}
+
+float updateEWMA(float curr, float ewma, float alpha) {
+    return(alpha*curr + (1-alpha)*ewma);
+}
+
+float clip(float v) {
+    if(v > VCLIP) v = VCLIP;
+    if(v < -VCLIP) v = -VCLIP;
+    return(v);
+}
+
+int main(void) {
+}

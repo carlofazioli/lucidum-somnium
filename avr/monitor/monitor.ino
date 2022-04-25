@@ -20,11 +20,31 @@ void setup() {
   randomSeed(0);
 }
 
-float HRGlobal = 60.0;
+
+float HR_g = 70.0;
+float tSinceLastMovement = 0.0;
+unsigned long millisPrev_g = 0UL;
+unsigned long millisCurr_g = 0UL;
+unsigned long tSinceLastMovement_ms = 0UL;
 
 void loop() {
-  HRGlobal = pollHR();
+  HR_g = updateHR(HR_g);
+  tSinceLastMovement_ms = updateTSinceLastMovement(tSinceLastMovement_ms);
+  Serial.print(HR_g);  
+  Serial.print(',');
+  Serial.print(tSinceLastMovement_ms / 1000);
   Serial.println();
+}
+
+float updateTSinceLastMovement(float t) {
+  unsigned long start = millis();
+  float acc = 300 * accelerationSensorIntervalMax();
+  if(acc > 290) {
+    t = 0;
+  } else {
+    t += millis() - start;
+  }
+  return t;
 }
 
 /*
@@ -38,29 +58,24 @@ void loop() {
  * are spurious and are ignored.  
  * 
  */
-unsigned long millisPrevGlobal = 0UL;
-unsigned long millisCurrGlobal = 0;
-float HREWMAGlobal = 0.0;
-float pollHR() {
+float updateHR(float hr) {
   float HRAlpha = 0.8;
   unsigned int deltaT = 0;
   unsigned int deltaTMin = 333;
   if(newWaveformStart()) {
-    millisPrevGlobal = millisCurrGlobal;
-    millisCurrGlobal = millis();
-    deltaT = millisCurrGlobal - millisPrevGlobal;
+    millisPrev_g = millisCurr_g;
+    millisCurr_g = millis();
+    deltaT = millisCurr_g - millisPrev_g;
     if(deltaTMin < deltaT) {
-      HREWMAGlobal *= (1 - HRAlpha);
-      HREWMAGlobal += HRAlpha * 60 * 1000 / deltaT;
+      hr *= (1 - HRAlpha);
+      hr += HRAlpha * 60 * 1000 / deltaT;
     }
   }
-  Serial.print(HREWMAGlobal);
-  Serial.print(',');
-  return HREWMAGlobal;
+  return hr;
 }
 
 /*
- * After measuring the photodiode signal, we need to identify the 
+ * After measuring the photoresistor signal, we need to identify the 
  * period in order to compute the HR.  To identify the period, we
  * track a Exponentially Weighted Moving Average of the IR signal.
  * Each time the IR signal crosses from below to above its EWMA,
@@ -74,24 +89,24 @@ float pollHR() {
  * detected and a 0 otherwise.  
  */
 
-float IRPrevGlobal = 0.0;
-float IRCurrGlobal = 0.0;
-float IREWMAGlobal = 0;
+float IRPrev_g = 0.0;
+float IRCurr_g = 0.0;
+float IREWMA_g = 0;
 byte newWaveformStart() {
   float IRAlpha = 0.01;  // alpha~0 => keep a lot of EWMA history
-  IRPrevGlobal = IRCurrGlobal;
-  IRCurrGlobal = IROpticalSensorTimeAvg();
-  IREWMAGlobal *= (1 - IRAlpha);
-  IREWMAGlobal += IRAlpha * IRPrevGlobal;
-  Serial.print(IRCurrGlobal);
+  IRPrev_g = IRCurr_g;
+  IRCurr_g = IROpticalSensorTimeAvg();
+  IREWMA_g *= (1 - IRAlpha);
+  IREWMA_g += IRAlpha * IRPrev_g;
+  Serial.print(IRCurr_g);
   Serial.print(',');
-  Serial.print(IREWMAGlobal);
+  Serial.print(IREWMA_g);
   Serial.print(',');
-  return (IRPrevGlobal < IREWMAGlobal) & (IREWMAGlobal <= IRCurrGlobal);
+  return (IRPrev_g < IREWMA_g) & (IREWMA_g <= IRCurr_g);
 }
 
 /*
- * The physical photodiode will be noisy, so we want to capture readings
+ * The physical photoresistor will be noisy, so we want to capture readings
  * that are time-averaged over some interval of width dt.  We use the 
  * do-while construct to ensure that at least 1 measurement is captured,
  * avoiding any divide-by-zero problems in the return value.  
@@ -130,15 +145,17 @@ float mockIROpticalSensor() {
   return mockIRReading + mockIRNoiseReading;
 }
 
-float accelerationSensorIntervalMax(float * targetArray, byte arrayLen) {
+float accelerationSensorIntervalMax() {
+  byte arrayLen = 3;
+  float accel[arrayLen];
   unsigned int dt = 50;
   float accelMax = -1.0;
   float mag;
   unsigned long now;
   unsigned long start = millis();
   do {
-    mockAccelerometerSensor(targetArray, arrayLen);
-    mag = magnitude(targetArray, arrayLen);
+    mockAccelerometerSensor(accel, arrayLen);
+    mag = magnitude(accel, arrayLen);
     accelMax = accelMax < mag ? mag : accelMax;
     now = millis();
   } while(now - start < dt);
@@ -150,7 +167,7 @@ float magnitude(float * vec, byte arrayLen) {
   for(byte i = 0; i < arrayLen; i++) {
     m += vec[i]*vec[i];
   }
-  return m;
+  return sqrt(m);
 }
 
 void mockAccelerometerSensor(float * targetArray, byte arrayLen) {
@@ -168,19 +185,19 @@ void mockAccelerometerSensor(float * targetArray, byte arrayLen) {
  * 
  * https://en.wikipedia.org/wiki/Box%E2%80%93Muller_transform
  */
-byte needNewNormalGlobal = 1;
-float z2Global;
+byte needNewNormal_g = 1;
+float z2_g;
 float standardNormalVariate() {
-  if(needNewNormalGlobal) {
+  if(needNewNormal_g) {
     float u1 = (float) random(1, LONG_MAX) / LONG_MAX;
     float u2 = (float) random(1, LONG_MAX) / LONG_MAX;
     float z1 = sqrt(-2*log(u1))*cos(TWO_PI*u2);
-    z2Global = sqrt(-2*log(u1))*sin(TWO_PI*u2);
-    needNewNormalGlobal = 0;
+    z2_g = sqrt(-2*log(u1))*sin(TWO_PI*u2);
+    needNewNormal_g = 0;
     return z1;
   } else {
-    needNewNormalGlobal = 1;
-    return z2Global;
+    needNewNormal_g = 1;
+    return z2_g;
   }
 }
 
